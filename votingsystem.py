@@ -1,163 +1,151 @@
-import tkinter as tk
-from tkinter import messagebox
-from PIL import Image, ImageTk
+from flask import Flask, render_template, request, jsonify
 import sqlite3
+from datetime import datetime
 import os
 
-parties = ["NOTA", "Party A", "Party B", "Party C", "Party D"]
-db_path = "voting_system.db"
+app = Flask(__name__)
+base_dir = os.path.abspath(os.path.dirname(__file__))
+db_path = os.path.join(base_dir, "voting.db")
 
-# SQLite Setup
+parties = ["NOTA", "Party A", "Party B", "Party C", "Party D"]
+
+def get_db_connection():
+    conn = sqlite3.connect(db_path, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def determine_winner(totals):
+    if not totals:
+        return {
+            "parties": [],
+            "votes": 0,
+            "is_tie": False,
+        }
+
+    highest = max(totals.values())
+    if highest == 0:
+        return {
+            "parties": [],
+            "votes": 0,
+            "is_tie": False,
+        }
+
+    winners = [party for party, count in totals.items() if count == highest]
+    return {
+        "parties": winners,
+        "votes": highest,
+        "is_tie": len(winners) > 1,
+    }
+
 def init_db():
-    conn = sqlite3.connect(db_path)
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("DROP TABLE IF EXISTS votes")  # Remove this line in production
-    cursor.execute("""
-        CREATE TABLE votes (
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS votes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_code TEXT UNIQUE,
-            age INTEGER,
-            party TEXT
+            user_code TEXT UNIQUE NOT NULL,
+            age INTEGER NOT NULL,
+            party TEXT NOT NULL,
+            created_at TEXT NOT NULL
         )
-    """)
+        """
+    )
     conn.commit()
     conn.close()
 
-def has_voted(user_code):
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-    cursor.execute("SELECT 1 FROM votes WHERE user_code = ?", (user_code,))
-    result = cursor.fetchone()
-    conn.close()
-    return result is not None
-
-def save_vote(party, user_code, age):
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-    try:
-        cursor.execute("INSERT INTO votes (user_code, age, party) VALUES (?, ?, ?)", (user_code, age, party))
-        conn.commit()
-        success = True
-    except sqlite3.IntegrityError:
-        success = False
-    conn.close()
-    return success
-
-def get_detailed_votes():
-    vote_details = {party: [] for party in parties}
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-    cursor.execute("SELECT user_code, age, party FROM votes")
-    for user_code, age, party in cursor.fetchall():
-        if party in vote_details:
-            vote_details[party].append((user_code, age))
-    conn.close()
-    return vote_details
-
-def cast_vote():
-    code = code_entry.get().strip()
-    age_input = age_entry.get().strip()
-    selected = selected_party.get()
-
-    if not code:
-        messagebox.showwarning("Error", "Enter your unique code.")
-        return
-    if not age_input.isdigit():
-        messagebox.showwarning("Error", "Enter a valid numeric age.")
-        return
-
-    age = int(age_input)
-    if age < 18:
-        messagebox.showerror("Underage", "You must be 18 or older to vote.")
-        return
-
-    if not selected:
-        messagebox.showwarning("Error", "Please select a party to vote for.")
-        return
-    if has_voted(code):
-        messagebox.showerror("Duplicate", "You have already voted!")
-        return
-    if save_vote(selected, code, age):
-        messagebox.showinfo("Success", f"Vote cast for {selected}")
-        code_entry.delete(0, tk.END)
-        age_entry.delete(0, tk.END)
-        selected_party.set(None)
-    else:
-        messagebox.showerror("Error", "Failed to cast vote.")
-
-def show_results():
-    vote_details = get_detailed_votes()
-    vote_counts = {party: len(vote_details[party]) for party in vote_details}
-
-    max_votes = max(vote_counts.values()) if vote_counts else 0
-    min_votes = min(vote_counts.values()) if vote_counts else 0
-
-    majority = [p for p in vote_counts if vote_counts[p] == max_votes]
-    minority = [p for p in vote_counts if vote_counts[p] == min_votes]
-
-    result_window = tk.Toplevel(root)
-    result_window.title("Voting Results")
-    result_window.attributes("-fullscreen", True)
-    result_window.configure(bg="#1f2833")
-
-    tk.Label(result_window, text="Voting Results", font=("Helvetica", 36, "bold"),
-             fg="#66fcf1", bg="#1f2833").pack(pady=40)
-
-    for party in parties:
-        color = "#45a29e" if party in majority else "#e74c3c" if party in minority else "#c5c6c7"
-        tk.Label(result_window, text=f"{party}: {vote_counts[party]} vote{'s' if vote_counts[party] != 1 else ''}",
-                 font=("Helvetica", 24, "bold"), fg=color, bg="#1f2833").pack(pady=10)
-
-    summary_text = f"\nMajority: {', '.join(majority)} with {max_votes} vote(s)\n"
-    summary_text += f"Minority: {', '.join(minority)} with {min_votes} vote(s)"
-    tk.Label(result_window, text=summary_text, font=("Helvetica", 20),
-             fg="#f1c40f", bg="#1f2833").pack(pady=30)
-
-    tk.Button(result_window, text="Close Results", command=result_window.destroy,
-              font=("Helvetica", 16), bg="#0b0c10", fg="white", padx=20, pady=10).pack(pady=20)
-
-    result_window.bind("<Escape>", lambda e: result_window.destroy())
-
-# GUI Setup
-root = tk.Tk()
-root.title("Voting System with SQLite")
-root.attributes("-fullscreen", True)
-root.configure(bg="#0b0c10")
-
-# Background image setup
-try:
-    bg_img = Image.open("voting_bg.png")
-    screen_width = root.winfo_screenwidth()
-    screen_height = root.winfo_screenheight()
-    bg_img_resized = bg_img.resize((screen_width, screen_height), Image.LANCZOS)
-    bg_photo = ImageTk.PhotoImage(bg_img_resized)
-    bg_label = tk.Label(root, image=bg_photo)
-    bg_label.place(relwidth=1, relheight=1)
-except Exception as e:
-    print("Background image not loaded:", e)
-
-frame = tk.Frame(root, bg='white', bd=6)
-frame.place(relx=0.5, rely=0.5, anchor='center')
-
-tk.Label(frame, text="Enter Your Unique Code", bg="white", font=('Helvetica', 16)).pack(pady=10)
-code_entry = tk.Entry(frame, font=('Helvetica', 16), width=30)
-code_entry.pack(pady=5)
-
-tk.Label(frame, text="Enter Your Age", bg="white", font=('Helvetica', 16)).pack(pady=10)
-age_entry = tk.Entry(frame, font=('Helvetica', 16), width=30)
-age_entry.pack(pady=5)
-
-tk.Label(frame, text="Select a Party", bg="white", font=('Helvetica', 16)).pack(pady=10)
-selected_party = tk.StringVar()
-for party in parties:
-    tk.Radiobutton(frame, text=party, variable=selected_party, value=party,
-                   bg="white", font=('Helvetica', 14)).pack(anchor="w")
-
-tk.Button(frame, text="Cast Vote", command=cast_vote, font=('Helvetica', 14),
-          bg="#1abc9c", fg="white", padx=20, pady=5).pack(pady=15)
-
-tk.Button(frame, text="Show Results", command=show_results, font=('Helvetica', 14),
-          bg="#3498db", fg="white", padx=20, pady=5).pack(pady=5)
-root.bind("<Escape>", lambda e: root.destroy())
 init_db()
-root.mainloop()
+
+def reset_votes():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM votes")
+    conn.commit()
+    conn.close()
+
+@app.route("/")
+def index():
+    reset_votes()
+    return render_template("index.html", parties=parties)
+
+@app.route("/vote", methods=["POST"])
+def vote():
+    data = request.get_json() or {}
+    user_code = str(data.get("user_code", "")).strip()
+    age_value = data.get("age")
+    party = data.get("party")
+
+    if not user_code:
+        return jsonify({"status": "error", "message": "Unique code is required."}), 400
+
+    try:
+        age = int(age_value)
+    except (TypeError, ValueError):
+        return jsonify({"status": "error", "message": "Age must be a number."}), 400
+
+    if age < 18:
+        return jsonify({"status": "error", "message": "You must be at least 18 years old to vote."}), 400
+    if party not in parties:
+        return jsonify({"status": "error", "message": "Please select a valid party."}), 400
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    created_at = datetime.utcnow().isoformat()
+    try:
+        cursor.execute(
+            "INSERT INTO votes (user_code, age, party, created_at) VALUES (?, ?, ?, ?)",
+            (user_code, age, party, created_at),
+        )
+        conn.commit()
+    except sqlite3.IntegrityError:
+        conn.rollback()
+        conn.close()
+        return jsonify({"status": "error", "message": "This code has already voted."}), 409
+
+    conn.close()
+    return jsonify({"status": "success", "message": "Vote cast successfully."})
+
+@app.route("/results")
+def results():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT user_code, age, party, created_at FROM votes")
+    rows = cursor.fetchall()
+    conn.close()
+
+    totals = {party: 0 for party in parties}
+    details = {party: [] for party in parties}
+
+    for row in rows:
+        totals[row[2]] += 1
+        details[row[2]].append({
+            "user_code": row[0],
+            "age": row[1],
+            "created_at": row[3],
+        })
+
+    winner = determine_winner(totals)
+    return jsonify({
+        "totals": totals,
+        "details": details,
+        "total_votes": len(rows),
+        "winner": winner,
+    })
+
+@app.route("/admin")
+def admin():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT user_code, age, party, created_at FROM votes ORDER BY created_at DESC LIMIT 100")
+    votes = cursor.fetchall()
+    totals = {}
+    for party in parties:
+        cursor.execute("SELECT COUNT(*) FROM votes WHERE party = ?", (party,))
+        totals[party] = cursor.fetchone()[0]
+    conn.close()
+
+    winner = determine_winner(totals)
+    return render_template("admin.html", votes=votes, totals=totals, winner=winner)
+
+if __name__ == "__main__":
+    app.run(debug=True)
